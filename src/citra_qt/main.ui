@@ -103,13 +103,16 @@
    <addaction name="menu_Help"/>
   </widget>
   <widget class="QToolBar" name="toolbar">
+   <property name="enabled">
+    <bool>true</bool>
+   </property>
    <property name="windowTitle">
     <string>Toolbar</string>
    </property>
    <property name="iconSize">
     <size>
-     <width>30</width>
-     <height>28</height>
+     <width>35</width>
+     <height>30</height>
     </size>
    </property>
    <property name="floatable">
@@ -248,6 +251,9 @@
    </property>
   </action>
   <action name="action_Toolbar_Start_Pause">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
    <property name="icon">
     <iconset resource="../../dist/toolbar_icons/toolbar_icons.qrc">
      <normaloff>:/toolbar_icons/rc/start.png</normaloff>:/toolbar_icons/rc/start.png</iconset>
@@ -276,7 +282,7 @@
   </action>
   <action name="action_Toolbar_Configure">
    <property name="enabled">
-    <bool>false</bool>
+    <bool>true</bool>
    </property>
    <property name="icon">
     <iconset resource="../../dist/toolbar_icons/toolbar_icons.qrc">
