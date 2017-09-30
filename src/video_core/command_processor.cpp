@@ -479,9 +479,8 @@ static void WritePicaReg(u32 id, u32 value, u32 mask) {
         // TODO(B3N30): If GS is off use the 4th shader unit
         // unsigned int num_units = use_gs ? VS_UNITS : VS_UNITS + 1;
         unsigned int num_units = VS_UNITS;
-        std::future<void> ft[num_units];
         for (size_t unit_id = 0; unit_id < num_units; ++unit_id) {
-            ft[unit_id] = thread_pool.Push(UnitLoop, false, unit_id, num_units);
+            thread_pool.Push(UnitLoop, false, unit_id, num_units);
         }
         for (unsigned int index = 0; index < regs.pipeline.num_vertices; ++index) {
             while (unit_manager.vs_output[index].batch_id.load(std::memory_order_acquire) !=
