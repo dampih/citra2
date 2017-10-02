@@ -491,7 +491,15 @@ static ResultCode ReplyAndReceive(s32* index, Kernel::Handle* handles, s32 handl
             return Kernel::ERR_SESSION_CLOSED_BY_REMOTE;
         }
 
-        // TODO(Subv): Perform IPC translation from the current thread to request_thread.
+        VAddr source_address = Kernel::GetCurrentThread()->GetCommandBufferAddress();
+        VAddr target_address = request_thread->GetCommandBufferAddress();
+
+        ResultCode translation_result = IPC::TranslateCommandBuffer(
+            Kernel::GetCurrentThread(), request_thread, source_address, target_address);
+
+        // Note: The real kernel seems to always panic if the Server->Client buffer translation
+        // fails for whatever reason.
+        ASSERT(translation_result.IsSuccess());
 
         // Note: The scheduler is not invoked here.
         request_thread->ResumeFromWait();
@@ -520,13 +528,35 @@ static ResultCode ReplyAndReceive(s32* index, Kernel::Handle* handles, s32 handl
         object->Acquire(thread);
         *index = static_cast<s32>(std::distance(objects.begin(), itr));
 
-        if (object->GetHandleType() == Kernel::HandleType::ServerSession) {
-            auto server_session = static_cast<Kernel::ServerSession*>(object);
-            if (server_session->parent->client == nullptr)
-                return Kernel::ERR_SESSION_CLOSED_BY_REMOTE;
+        if (object->GetHandleType() != Kernel::HandleType::ServerSession)
+            return RESULT_SUCCESS;
 
-            // TODO(Subv): Perform IPC translation from the ServerSession to the current thread.
+        auto server_session = static_cast<Kernel::ServerSession*>(object);
+        if (server_session->parent->client == nullptr)
+            return Kernel::ERR_SESSION_CLOSED_BY_REMOTE;
+
+        VAddr target_address = Kernel::GetCurrentThread()->GetCommandBufferAddress();
+        VAddr source_address = server_session->currently_handling->GetCommandBufferAddress();
+
+        ResultCode translation_result =
+            IPC::TranslateCommandBuffer(server_session->currently_handling,
+                                        Kernel::GetCurrentThread(), source_address, target_address);
+
+        // Set the output of SendSyncRequest in the client thread to the translation output.
+        server_session->currently_handling->SetWaitSynchronizationResult(translation_result);
+
+        // If a translation error occurred, immediately resume the client thread.
+        if (translation_result.IsError()) {
+            server_session->currently_handling->ResumeFromWait();
+            server_session->currently_handling = nullptr;
+
+            // Try to find the next ready object that doesn't cause a buffer translation error when
+            // acquired.
+
+            // TODO(Subv): This path should try to wait again on the same objects.
+            ASSERT_MSG(false, "ReplyAndReceive translation error behavior unimplemented");
         }
+
         return RESULT_SUCCESS;
     }
 
@@ -550,10 +580,35 @@ static ResultCode ReplyAndReceive(s32* index, Kernel::Handle* handles, s32 handl
         ASSERT(thread->status == THREADSTATUS_WAIT_SYNCH_ANY);
         ASSERT(reason == ThreadWakeupReason::Signal);
 
+        if (object->GetHandleType() == Kernel::HandleType::ServerSession) {
+            auto server_session = Kernel::DynamicObjectCast<Kernel::ServerSession>(object);
+            if (server_session->parent->client == nullptr) {
+                thread->SetWaitSynchronizationResult(Kernel::ERR_SESSION_CLOSED_BY_REMOTE);
+                return;
+            }
+
+            VAddr target_address = Kernel::GetCurrentThread()->GetCommandBufferAddress();
+            VAddr source_address = server_session->currently_handling->GetCommandBufferAddress();
+
+            ResultCode translation_result = IPC::TranslateCommandBuffer(
+                server_session->currently_handling, Kernel::GetCurrentThread(), source_address,
+                target_address);
+
+            // Set the output of SendSyncRequest in the client thread to the translation output.
+            server_session->currently_handling->SetWaitSynchronizationResult(translation_result);
+
+            // If a translation error occurred, immediately resume the client thread.
+            if (translation_result.IsError()) {
+                server_session->currently_handling->ResumeFromWait();
+                server_session->currently_handling = nullptr;
+
+                // TODO(Subv): This path should try to wait again on the same objects.
+                ASSERT_MSG(false, "ReplyAndReceive translation error behavior unimplemented");
+            }
+        }
+
         thread->SetWaitSynchronizationResult(RESULT_SUCCESS);
         thread->SetWaitSynchronizationOutput(thread->GetWaitObjectIndex(object.get()));
-
-        // TODO(Subv): Perform IPC translation upon wakeup.
     };
 
     Core::System::GetInstance().PrepareReschedule();
