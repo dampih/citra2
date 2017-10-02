@@ -66,6 +66,8 @@ ResultCode ServerSession::HandleSyncRequest(SharedPtr<Thread> thread) {
         // Add the thread to the list of threads that have issued a sync request with this
         // server.
         pending_requesting_threads.push_back(std::move(thread));
+        // Put the thread to sleep until the server replies, it will be awoken in svcReplyAndReceive.
+        thread->status = THREADSTATUS_WAIT_IPC;
     }
 
     // If this ServerSession does not have an HLE implementation, just wake up the threads waiting
