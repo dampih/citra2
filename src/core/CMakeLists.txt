@@ -60,6 +60,7 @@ set(SRCS
             hle/kernel/timer.cpp
             hle/kernel/vm_manager.cpp
             hle/kernel/wait_object.cpp
+            hle/ipc.cpp
             hle/lock.cpp
             hle/romfs.cpp
             hle/service/ac/ac.cpp
