@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include <cstring>
+#include "iostream"
 #include <string>
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -14,6 +15,7 @@
 #include "core/hle/service/gsp_gpu.h"
 #include "core/hle/service/hid/hid.h"
 #include "core/memory.h"
+#include "stdafx.h"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -77,9 +79,9 @@ void SoftwareKeyboard::Update() {
     // TODO(Subv): Handle input using the touch events from the HID module
 
     // TODO(Subv): Remove this hardcoded text
-    std::u16string text = Common::UTF8ToUTF16(QInputDialog::getText(
-        "Citra", "Enter text:", QLineEdit::Normal,
-        QString::null, &ok, this ));
+    string swkbdInputText;
+    std::getline(std::cin, input);
+    std::u16string text = Common::UTF8ToUTF16(input);
     memcpy(text_memory->GetPointer(), text.c_str(), text.length() * sizeof(char16_t));
 
     // TODO(Subv): Ask for input and write it to the shared memory
