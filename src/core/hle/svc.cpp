@@ -587,11 +587,11 @@ static ResultCode ReplyAndReceive(s32* index, Kernel::Handle* handles, s32 handl
                 return;
             }
 
-            VAddr target_address = Kernel::GetCurrentThread()->GetCommandBufferAddress();
+            VAddr target_address = thread->GetCommandBufferAddress();
             VAddr source_address = server_session->currently_handling->GetCommandBufferAddress();
 
             ResultCode translation_result = IPC::TranslateCommandBuffer(
-                server_session->currently_handling, Kernel::GetCurrentThread(), source_address,
+                server_session->currently_handling, thread, source_address,
                 target_address);
 
             // Set the output of SendSyncRequest in the client thread to the translation output.
