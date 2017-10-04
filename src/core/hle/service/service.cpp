@@ -46,7 +46,7 @@
 #include "core/hle/service/service.h"
 #include "core/hle/service/sm/sm.h"
 #include "core/hle/service/sm/srv.h"
-#include "core/hle/service/soc_u.h"
+#include "core/hle/service/soc/soc_u.h"
 #include "core/hle/service/ssl_c.h"
 #include "core/hle/service/y2r_u.h"
 

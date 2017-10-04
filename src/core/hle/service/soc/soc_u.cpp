@@ -14,7 +14,7 @@
 #include "core/hle/ipc.h"
 #include "core/hle/kernel/server_session.h"
 #include "core/hle/result.h"
-#include "core/hle/service/soc_u.h"
+#include "core/hle/service/soc/soc_u.h"
 #include "core/memory.h"
 
 #ifdef _WIN32

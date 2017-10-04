@@ -163,7 +163,7 @@ set(SRCS
             hle/service/service.cpp
             hle/service/sm/sm.cpp
             hle/service/sm/srv.cpp
-            hle/service/soc_u.cpp
+            hle/service/soc/soc_u.cpp
             hle/service/ssl_c.cpp
             hle/service/y2r_u.cpp
             hle/shared_page.cpp
@@ -364,7 +364,7 @@ set(HEADERS
             hle/service/service.h
             hle/service/sm/sm.h
             hle/service/sm/srv.h
-            hle/service/soc_u.h
+            hle/service/soc/soc_u.h
             hle/service/ssl_c.h
             hle/service/y2r_u.h
             hle/shared_page.h
