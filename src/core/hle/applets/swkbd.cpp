@@ -3,6 +3,8 @@
 // Refer to the license.txt file included.
 
 #include "cstring"
+#include <iostream>
+#include <string>
 #include "iostream"
 #include "string"
 #include "common/assert.h"
@@ -15,6 +17,8 @@
 #include "core/hle/service/gsp_gpu.h"
 #include "core/hle/service/hid/hid.h"
 #include "core/memory.h"
+
+using namespace std;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
