@@ -3,7 +3,6 @@
 // Refer to the license.txt file included.
 
 #include <atomic>
-#include "common/bit_field.h"
 #include "core/core_timing.h"
 #include "core/frontend/input.h"
 #include "core/hle/ipc_helpers.h"
@@ -12,22 +11,11 @@
 #include "core/hle/service/hid/hid.h"
 #include "core/hle/service/ir/ir.h"
 #include "core/hle/service/ir/ir_rst.h"
+#include "core/movie.h"
 #include "core/settings.h"
 
 namespace Service {
 namespace IR {
-
-union PadState {
-    u32_le hex{};
-
-    BitField<14, 1, u32_le> zl;
-    BitField<15, 1, u32_le> zr;
-
-    BitField<24, 1, u32_le> c_stick_right;
-    BitField<25, 1, u32_le> c_stick_left;
-    BitField<26, 1, u32_le> c_stick_up;
-    BitField<27, 1, u32_le> c_stick_down;
-};
 
 struct PadDataEntry {
     PadState current_state;
@@ -88,8 +76,10 @@ static void UpdateCallback(u64 userdata, int cycles_late) {
     float c_stick_x_f, c_stick_y_f;
     std::tie(c_stick_x_f, c_stick_y_f) = c_stick->GetStatus();
     constexpr int MAX_CSTICK_RADIUS = 0x9C; // Max value for a c-stick radius
-    const s16 c_stick_x = static_cast<s16>(c_stick_x_f * MAX_CSTICK_RADIUS);
-    const s16 c_stick_y = static_cast<s16>(c_stick_y_f * MAX_CSTICK_RADIUS);
+    s16 c_stick_x = static_cast<s16>(c_stick_x_f * MAX_CSTICK_RADIUS);
+    s16 c_stick_y = static_cast<s16>(c_stick_y_f * MAX_CSTICK_RADIUS);
+
+    Movie::HandleIrRst(state, c_stick_x, c_stick_y);
 
     if (!raw_c_stick) {
         const HID::DirectionState direction = HID::GetStickDirectionState(c_stick_x, c_stick_y);
