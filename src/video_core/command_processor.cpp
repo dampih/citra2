@@ -9,6 +9,7 @@
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
+#include "common/thread_pool.h"
 #include "common/vector_math.h"
 #include "core/hle/service/gsp_gpu.h"
 #include "core/hw/gpu.h"
@@ -31,6 +32,43 @@
 namespace Pica {
 
 namespace CommandProcessor {
+
+class ShaderUnitManager {
+private:
+    struct CacheEntry {
+        Shader::AttributeBuffer output_attr;
+        Shader::OutputVertex output_vertex;
+        std::atomic<u32> id;
+        // Set when a thread is writing into this entry
+        std::atomic_flag writing{ATOMIC_FLAG_INIT};
+    };
+
+    struct VsOutput {
+        Pica::Shader::OutputVertex vertex;
+        std::atomic<u32> batch_id;
+        explicit VsOutput() = default;
+        VsOutput(VsOutput&& other) {
+            batch_id = 0;
+        }
+    };
+
+public:
+    std::array<CacheEntry, 0x10000> cache;
+    // used as a mean to invalidate data from the previous batch without clearing it
+    u32 cache_batch_id = std::numeric_limits<u32>::max();
+    std::vector<VsOutput> vs_output;
+
+    void IncreaseCacheBatchId() {
+        ++cache_batch_id;
+        // reset cache if the emu ever runs long enough to overflow id
+        if (cache_batch_id == 0) {
+            ++cache_batch_id;
+            for (auto& entry : cache)
+                entry.id = 0;
+        }
+    }
+};
+static ShaderUnitManager unit_manager;
 
 static int vs_float_regs_counter = 0;
 static u32 vs_uniform_write_buffer[4];
@@ -230,7 +268,6 @@ static void WritePicaReg(u32 id, u32 value, u32 mask) {
                                                  static_cast<void*>(&immediate_input));
                     Shader::UnitState shader_unit;
                     Shader::AttributeBuffer output{};
-
                     shader_unit.LoadInput(regs.vs, immediate_input);
                     shader_engine->Run(g_state.vs, shader_unit);
                     shader_unit.WriteOutput(regs.vs, output);
@@ -288,7 +325,6 @@ static void WritePicaReg(u32 id, u32 value, u32 mask) {
         // loaded.
         // Later, these can be compiled and cached.
         const u32 base_address = regs.pipeline.vertex_attributes.GetPhysicalBaseAddress();
-        VertexLoader loader(regs.pipeline);
 
         // Load vertices
         bool is_indexed = (id == PICA_REG_INDEX(pipeline.trigger_draw_indexed));
@@ -297,6 +333,11 @@ static void WritePicaReg(u32 id, u32 value, u32 mask) {
         const u8* index_address_8 = Memory::GetPhysicalPointer(base_address + index_info.offset);
         const u16* index_address_16 = reinterpret_cast<const u16*>(index_address_8);
         bool index_u16 = index_info.format != 0;
+
+        unit_manager.IncreaseCacheBatchId();
+        if (unit_manager.vs_output.size() < regs.pipeline.num_vertices) {
+            unit_manager.vs_output.resize(regs.pipeline.num_vertices);
+        }
 
         PrimitiveAssembler<Shader::OutputVertex>& primitive_assembler = g_state.primitive_assembler;
 
@@ -314,20 +355,7 @@ static void WritePicaReg(u32 id, u32 value, u32 mask) {
             }
         }
 
-        DebugUtils::MemoryAccessTracker memory_accesses;
-
-        // Simple circular-replacement vertex cache
-        // The size has been tuned for optimal balance between hit-rate and the cost of lookup
-        const size_t VERTEX_CACHE_SIZE = 32;
-        std::array<u16, VERTEX_CACHE_SIZE> vertex_cache_ids;
-        std::array<Shader::AttributeBuffer, VERTEX_CACHE_SIZE> vertex_cache;
-        Shader::AttributeBuffer vs_output;
-
-        unsigned int vertex_cache_pos = 0;
-        vertex_cache_ids.fill(-1);
-
         auto* shader_engine = Shader::GetEngine();
-        Shader::UnitState shader_unit;
 
         shader_engine->SetupBatch(g_state.vs, regs.vs.main_offset);
 
@@ -336,66 +364,134 @@ static void WritePicaReg(u32 id, u32 value, u32 mask) {
         if (g_state.geometry_pipeline.NeedIndexInput())
             ASSERT(is_indexed);
 
-        for (unsigned int index = 0; index < regs.pipeline.num_vertices; ++index) {
-            // Indexed rendering doesn't use the start offset
-            unsigned int vertex =
-                is_indexed ? (index_u16 ? index_address_16[index] : index_address_8[index])
-                           : (index + regs.pipeline.vertex_offset);
+        auto UnitLoop = [&](bool single_thread, u32 unit_id, u32 unit_increment) {
+            DebugUtils::MemoryAccessTracker memory_accesses;
+            Shader::UnitState shader_unit = g_state.vs_unit[unit_id];
+            VertexLoader loader(regs.pipeline);
 
-            // -1 is a common special value used for primitive restart. Since it's unknown if
-            // the PICA supports it, and it would mess up the caching, guard against it here.
-            ASSERT(vertex != -1);
+            for (unsigned int index = unit_id; index < regs.pipeline.num_vertices;
+                 index += unit_increment) {
+                // Indexed rendering doesn't use the start offset
+                unsigned int vertex =
+                    is_indexed ? (index_u16 ? index_address_16[index] : index_address_8[index])
+                               : (index + regs.pipeline.vertex_offset);
 
-            bool vertex_cache_hit = false;
+                // -1 is a common special value used for primitive restart. Since it's unknown if
+                // the PICA supports it, and it would mess up the caching, guard against it here.
+                ASSERT(vertex != -1);
 
-            if (is_indexed) {
-                if (g_state.geometry_pipeline.NeedIndexInput()) {
-                    g_state.geometry_pipeline.SubmitIndex(vertex);
-                    continue;
-                }
+                bool vertex_cache_hit = false;
 
-                if (g_debug_context && Pica::g_debug_context->recorder) {
-                    int size = index_u16 ? 2 : 1;
-                    memory_accesses.AddAccess(base_address + index_info.offset + size * index,
-                                              size);
-                }
+                Shader::AttributeBuffer output_attr_tmp;
+                Shader::AttributeBuffer& output_attr =
+                    is_indexed ? unit_manager.cache[vertex].output_attr : output_attr_tmp;
 
-                for (unsigned int i = 0; i < VERTEX_CACHE_SIZE; ++i) {
-                    if (vertex == vertex_cache_ids[i]) {
-                        vs_output = vertex_cache[i];
-                        vertex_cache_hit = true;
-                        break;
-                    }
-                }
-            }
-
-            if (!vertex_cache_hit) {
-                // Initialize data for the current vertex
-                Shader::AttributeBuffer input;
-                loader.LoadVertex(base_address, index, vertex, input, memory_accesses);
-
-                // Send to vertex shader
-                if (g_debug_context)
-                    g_debug_context->OnEvent(DebugContext::Event::VertexShaderInvocation,
-                                             (void*)&input);
-                shader_unit.LoadInput(regs.vs, input);
-                shader_engine->Run(g_state.vs, shader_unit);
-                shader_unit.WriteOutput(regs.vs, vs_output);
+                Pica::Shader::OutputVertex output_vertex_tmp;
+                Pica::Shader::OutputVertex& output_vertex =
+                    is_indexed ? unit_manager.cache[vertex].output_vertex : output_vertex_tmp;
 
                 if (is_indexed) {
-                    vertex_cache[vertex_cache_pos] = vs_output;
-                    vertex_cache_ids[vertex_cache_pos] = vertex;
-                    vertex_cache_pos = (vertex_cache_pos + 1) % VERTEX_CACHE_SIZE;
+                    if (single_thread && g_state.geometry_pipeline.NeedIndexInput()) {
+                        g_state.geometry_pipeline.SubmitIndex(vertex);
+                        continue;
+                    }
+
+                    if (g_debug_context && Pica::g_debug_context->recorder) {
+                        int size = index_u16 ? 2 : 1;
+                        memory_accesses.AddAccess(base_address + index_info.offset + size * index,
+                                                  size);
+                    }
+
+                    if (single_thread) {
+                        if (unit_manager.cache[vertex].id.load(std::memory_order_relaxed) ==
+                            unit_manager.cache_batch_id) {
+                            vertex_cache_hit = true;
+                        }
+                    } else if (unit_manager.cache[vertex].id.load(std::memory_order_acquire) ==
+                               unit_manager.cache_batch_id) {
+                        vertex_cache_hit = true;
+                    }
+                    // Set the "writing" flag and check its previous status
+                    else if (unit_manager.cache[vertex].writing.test_and_set(
+                                 std::memory_order_acquire)) {
+                        // Another thread is writing into the cache, spin until it's done
+                        while (unit_manager.cache[vertex].writing.test_and_set(
+                            std::memory_order_acquire))
+                            ;
+                        unit_manager.cache[vertex].writing.clear(std::memory_order_release);
+                        vertex_cache_hit = true;
+                    }
+                }
+
+                if (!vertex_cache_hit) {
+                    // Initialize data for the current vertex
+                    Shader::AttributeBuffer input;
+                    loader.LoadVertex(base_address, index, vertex, input, memory_accesses);
+
+                    // Send to vertex shader
+                    if (g_debug_context)
+                        g_debug_context->OnEvent(DebugContext::Event::VertexShaderInvocation,
+                                                 &input);
+                    shader_unit.LoadInput(regs.vs, input);
+                    shader_engine->Run(g_state.vs, shader_unit);
+
+                    shader_unit.WriteOutput(regs.vs, output_attr);
+                    if (!single_thread)
+                        output_vertex =
+                            Shader::OutputVertex::FromAttributeBuffer(regs.rasterizer, output_attr);
+
+                    if (is_indexed) {
+                        if (single_thread) {
+                            unit_manager.cache[vertex].id.store(unit_manager.cache_batch_id,
+                                                                std::memory_order_relaxed);
+                        } else {
+                            unit_manager.cache[vertex].id.store(unit_manager.cache_batch_id,
+                                                                std::memory_order_release);
+                            unit_manager.cache[vertex].writing.clear(std::memory_order_release);
+                        }
+                    }
+                }
+
+                if (single_thread) {
+                    // Send to geometry pipeline
+                    g_state.geometry_pipeline.SubmitVertex(output_attr);
+                } else {
+                    unit_manager.vs_output[index].vertex = output_vertex;
+                    unit_manager.vs_output[index].batch_id.store(unit_manager.cache_batch_id,
+                                                                 std::memory_order_release);
                 }
             }
 
-            // Send to geometry pipeline
-            g_state.geometry_pipeline.SubmitVertex(vs_output);
-        }
+            static std::mutex dbg_mtx;
+            if (!memory_accesses.ranges.empty()) {
+                std::lock_guard<std::mutex> lock(dbg_mtx);
+                for (auto& range : memory_accesses.ranges) {
+                    g_debug_context->recorder->MemoryAccessed(
+                        Memory::GetPhysicalPointer(range.first), range.second, range.first);
+                }
+            }
+        };
 
-        for (auto& range : memory_accesses.ranges) {
-            g_debug_context->recorder->MemoryAccessed(Memory::GetPhysicalPointer(range.first),
-                                                      range.second, range.first);
+        constexpr unsigned int VS_UNITS = 3;
+        const bool use_gs = regs.pipeline.use_gs == PipelineRegs::UseGS::Yes;
+
+        auto& thread_pool = Common::ThreadPool::GetPool();
+        // TODO(B3N30): If GS is off use the 4th shader unit
+        // unsigned int num_units = use_gs ? VS_UNITS : VS_UNITS + 1;
+        unsigned int num_units = VS_UNITS;
+        for (size_t unit_id = 0; unit_id < num_units; ++unit_id) {
+            thread_pool.Push(UnitLoop, false, unit_id, num_units);
+        }
+        for (unsigned int index = 0; index < regs.pipeline.num_vertices; ++index) {
+            while (unit_manager.vs_output[index].batch_id.load(std::memory_order_acquire) !=
+                   unit_manager.cache_batch_id)
+                ;
+            using Pica::Shader::OutputVertex;
+            primitive_assembler.SubmitVertex(
+                unit_manager.vs_output[index].vertex,
+                [](const OutputVertex& v0, const OutputVertex& v1, const OutputVertex& v2) {
+                    VideoCore::g_renderer->Rasterizer()->AddTriangle(v0, v1, v2);
+                });
         }
 
         VideoCore::g_renderer->Rasterizer()->DrawTriangles();
