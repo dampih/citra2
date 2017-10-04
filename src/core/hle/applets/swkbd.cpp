@@ -2,9 +2,9 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-#include <cstring>
+#include "cstring"
 #include "iostream"
-#include <string>
+#include "string"
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "common/string_util.h"
@@ -78,7 +78,7 @@ void SoftwareKeyboard::Update() {
     // TODO(Subv): Handle input using the touch events from the HID module
 
     // TODO(Subv): Remove this hardcoded text
-    string swkbdInputText;
+    string input = "Citra";
     std::getline(std::cin, input);
     std::u16string text = Common::UTF8ToUTF16(input);
     memcpy(text_memory->GetPointer(), text.c_str(), text.length() * sizeof(char16_t));
