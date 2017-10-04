@@ -33,6 +33,9 @@
          <layout class="QHBoxLayout" name="horizontalLayout_3">
           <item>
            <widget class="QCheckBox" name="toggle_gdbstub">
+            <property name="toolTip">
+             <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;GDB Stub enable you to debug Games/3DS Apps with a remote GDB Debugger. It contains basical function but some problems still exist. Unselect it if you don't need it.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            </property>
             <property name="text">
              <string>Enable GDB Stub</string>
             </property>

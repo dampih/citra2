@@ -136,7 +136,7 @@ void Config::ReadValues() {
     qt_config->endGroup();
 
     qt_config->beginGroup("Debugging");
-    Settings::values.use_gdbstub = qt_config->value("use_gdbstub", false).toBool();
+    Settings::values.use_gdbstub = false;
     Settings::values.gdbstub_port = qt_config->value("gdbstub_port", 24689).toInt();
     qt_config->endGroup();
 
@@ -289,7 +289,6 @@ void Config::SaveValues() {
     qt_config->endGroup();
 
     qt_config->beginGroup("Debugging");
-    qt_config->setValue("use_gdbstub", Settings::values.use_gdbstub);
     qt_config->setValue("gdbstub_port", Settings::values.gdbstub_port);
     qt_config->endGroup();
 
