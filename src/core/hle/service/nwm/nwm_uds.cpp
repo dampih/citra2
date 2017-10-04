@@ -729,13 +729,14 @@ static void BeginHostingNetwork(Interface* self) {
 
     LOG_DEBUG(Service_NWM, "called");
 
-    Memory::ReadBlock(network_info_address, &network_info, sizeof(NetworkInfo));
-
-    // The real UDS module throws a fatal error if this assert fails.
-    ASSERT_MSG(network_info.max_nodes > 1, "Trying to host a network of only one member.");
-
     {
         std::lock_guard<std::mutex> lock(connection_status_mutex);
+
+        Memory::ReadBlock(network_info_address, &network_info, sizeof(NetworkInfo));
+
+        // The real UDS module throws a fatal error if this assert fails.
+        ASSERT_MSG(network_info.max_nodes > 1, "Trying to host a network of only one member.");
+
         connection_status.status = static_cast<u32>(NetworkStatus::ConnectedAsHost);
 
         // Ensure the application data size is less than the maximum value.
@@ -749,11 +750,13 @@ static void BeginHostingNetwork(Interface* self) {
         connection_status.max_nodes = network_info.max_nodes;
 
         // Resize the nodes list to hold max_nodes.
+        node_info.clear();
         node_info.resize(network_info.max_nodes);
 
         // There's currently only one node in the network (the host).
         connection_status.total_nodes = 1;
         network_info.total_nodes = 1;
+
         // The host is always the first node
         connection_status.network_node_id = 1;
         current_node.network_node_id = 1;
@@ -762,12 +765,24 @@ static void BeginHostingNetwork(Interface* self) {
         connection_status.node_bitmask |= 1;
         // Notify the application that the first node was set.
         connection_status.changed_nodes |= 1;
-        node_info[0] = current_node;
-    }
 
-    // If the game has a preferred channel, use that instead.
-    if (network_info.channel != 0)
-        network_channel = network_info.channel;
+        if (auto room_member = Network::GetRoomMember().lock()) {
+            if (room_member->IsConnected()) {
+                network_info.host_mac_address = room_member->GetMacAddress();
+            } else {
+                network_info.host_mac_address = {{0x0, 0x0, 0x0, 0x0, 0x0, 0x0}};
+            }
+        }
+
+        current_node.address = network_info.host_mac_address;
+        node_info[0] = current_node;
+
+        // If the game has a preferred channel, use that instead.
+        if (network_info.channel != 0)
+            network_channel = network_info.channel;
+        else
+            network_info.channel = DefaultNetworkChannel;
+    }
 
     connection_status_event->Signal();
 
@@ -775,8 +790,7 @@ static void BeginHostingNetwork(Interface* self) {
     CoreTiming::ScheduleEvent(msToCycles(DefaultBeaconInterval * MillisecondsPerTU),
                               beacon_broadcast_event, 0);
 
-    LOG_WARNING(Service_NWM,
-                "An UDS network has been created, but broadcasting it is unimplemented.");
+    LOG_DEBUG(Service_NWM, "An UDS network has been created.");
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(RESULT_SUCCESS);
